@@ -1,51 +1,58 @@
 using Distributions
 using QuadGK
 using Dates
+using Distributed
+using BenchmarkTools
+
 
 """
 
     function pCond(M::Float64, N::Int64, t::Float64, a::Float64, h::Float64)
 
 """
-function pCond(M::Float64, N::Int64, t::Float64, a::Float64, h::Float64)
+function pCond!(p::Matrix{Float64}, M::Float64, N::Int64, t::Float64, a::Float64, h::Float64)
                                
   q = 1.0 - exp(-h * t)
 
-  d = Normal(0, 1)
+  d = Normal()
   x = quantile(d, q)
   q_m = cdf(d, (x - a * M)/sqrt(1 - a * a))
   
-  K = N + 1
-  p = zeros(K, K)
-  p_cond = zeros(K)
+  K::Int64 = N + 1
   
   p[1,1] = 1.0
   for k in 2:K
     p[k,1] = p[k-1,1] * (1.0 - q_m)
     for l in 2:K
-      p[k,l] = p[k-1,l] * (1.0 - q_m) + p[k-1,l-1] * q_m
+      p[k,l] = p[k-1,l]*(1.0 - q_m) + p[k-1,l-1] * q_m
     end 
-  end
-  p[K-1,K-1] = p[K-2,K-2] * q_m
+  end;
 
-  p_cond = p[K-1,:];
-  
-  return p_cond  
+  p[K-1,K-1] = p[K-2,K-2] * q_m
+  return p
 end
 
 
-
 """
-    function f(x::Float64, N::Int64, t::Float64, a::Float64, h::FLoat64,
-            l::Int64)
+    function f(x::Float64, N::Int64, t::Float64, a::Float64, h::FLoat64, l::Int64, p::Matrix{Float64})
 """
-function f(x::Float64, N::Int64, t::Float64, a::Float64, h::Float64,
-        l::Int64)
+function f(x::Float64, N::Int64, t::Float64, a::Float64, h::Float64, l::Int64, p::Matrix{Float64})
 
-    p_cond = pCond(x, N, t, a, h)
-    y = p_cond[l] * 1.0/√(2.0 * π) * exp(-0.5*x^2)
+    pCond!(p, x, N, t, a, h)
+    y = p[N, l] * 1.0/√(2.0 * π) * exp(-0.5*x^2)
 
     return y 
+end
+
+
+"""
+    function vrad_integration(N::Int64, t::Float64, a::Float64, h::Float64, l::Int64, buf)
+"""
+function vrad_integration(N::Int64, t::Float64, a::Float64, h::Float64, l::Int64, p::Matrix{Float64}, 
+    buf)
+
+    val = quadgk(x -> f(x, N, t, a, h, l, p), -Inf, Inf; segbuf=buf)[1]
+    return val
 end
 
 
@@ -53,11 +60,11 @@ end
     function probDist(N::Int64, t::Float64, a::Float64, h::Float64)
 
 """
-function probDist(N::Int64, t::Float64, a::Float64, h::Float64)
+function probDist!(N::Int64, t::Float64, a::Float64, h::Float64, p::Matrix{Float64},
+    p_uncond::Vector{Float64}, buf)
 
-    p_uncond = zeros(N+1)
     for l in 1:N+1
-        p_uncond[l], _ = quadgk(x -> f(x, N, t, a, h, l), -Inf, Inf)
+        p_uncond[l] = vrad_integration(N, t, a, h, l, p, buf)
     end
     
     return p_uncond
@@ -104,12 +111,17 @@ d = exp.(-r_f * dt .* (1:num_periods))
 el = zeros(num_periods)
 ufee = zeros(num_periods)
 
+buf = alloc_segbuf()
+p = zeros(Float64, N+1, N+1)
+p_uncond = zeros(Float64, N+1)
+
 p_dist = zeros(N+1, num_periods)
+
 B = create_schedule(A, num_periods, 25.0)
 
 for i in 1:num_periods
     tper = i * dt
-    p_dist[:, i] = probDist(N, tper, a, h)
+    p_dist[:, i] = probDist!(N, tper, a, h, p, p_uncond, buf)
     per_loan_loss = B[i] * (1 - R)
     loss = 0.0
     for l in 1:N+1
