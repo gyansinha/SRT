@@ -1,5 +1,6 @@
 module SRT
 
-# Write your package code here.
+    export tranche_valuation, pCond!, probDist!, create_schedule
+    include("probDist.jl")
 
 end
