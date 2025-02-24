@@ -1,6 +1,6 @@
 using Distributions
 using QuadGK
-using Printf
+using Dates
 
 """
 
@@ -23,7 +23,7 @@ function pCond(M::Float64, N::Int64, t::Float64, a::Float64, h::Float64)
   for k in 2:K
     p[k,1] = p[k-1,1] * (1.0 - q_m)
     for l in 2:K
-      p[k,l] = p[k-1,l]*(1.0 - q_m) + p[k-1,l-1] * q_m
+      p[k,l] = p[k-1,l] * (1.0 - q_m) + p[k-1,l-1] * q_m
     end 
   end
   p[K-1,K-1] = p[K-2,K-2] * q_m
@@ -64,20 +64,38 @@ function probDist(N::Int64, t::Float64, a::Float64, h::Float64)
 end
 
 
+"""
+    function create_schedule(A::Float64, T::Int64, cpr::Float64)
+"""
+function create_schedule(A::Float64, T::Int64, cpr::Float64)
+    smm = 1 - (1-cpr/100)^(1/12)
+    B = zeros(T)
+    B[1] = A
+    for t in 2:T
+        B[t] = B[t-1] * (1 - smm)
+    end
+    return B 
+end
+
+
 N = 100
 A = 1.0e+07
 R = 0.40
-T = 5
-num_periods = T * 4
 
-a = sqrt(0.75)
-single_name_spread = 98/10000
+first_pay_date = Date("2025-04-25")
+last_pay_date = Date("2032-02-25")
+pmt_dates = collect(first_pay_date:Month(1):last_pay_date)
+num_periods = length(pmt_dates)
+
+ρ = 0.90
+a = sqrt(ρ)
+single_name_spread = 98/10_000
 h = single_name_spread/(1-R)
 dt = (3/12)
 r_f = 0.0425
 
-attach = 0.000
-detach = 0.025
+attach = 0.0475
+detach = 0.1250
 H = detach * (A * N)
 L = attach * (A * N)
 
@@ -87,12 +105,15 @@ el = zeros(num_periods)
 ufee = zeros(num_periods)
 
 p_dist = zeros(N+1, num_periods)
+B = create_schedule(A, num_periods, 25.0)
+
 for i in 1:num_periods
     tper = i * dt
     p_dist[:, i] = probDist(N, tper, a, h)
+    per_loan_loss = B[i] * (1 - R)
     loss = 0.0
     for l in 1:N+1
-        loss += p_dist[l, i] * max(min((l-1) * A * (1-R), H) - L, 0)
+        loss += p_dist[l, i] * max(min((l-1) * per_loan_loss, H) - L, 0)
     end
     el[i] = loss
     ufee[i] = (d[i] * dt * ((H - L) - el[i]))
