@@ -86,12 +86,14 @@ end
 """
     function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64, 
         single_name_spread::Float64, tranche_spread::Float64, first_pay_date::Date, last_pay_date::Date; 
-        N::Int64=100, A::Float64=10.0e+06, R::Float64=0.40,  periods::Int64=12, r_f::Float64=0.0425)
+        N::Int64=100, A::Float64=10.0e+06, R::Float64=0.40,  periods::Int64=12, r_f::Float64=0.0425,
+        cpr::Float64=25.0)
 
 """
 function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64, 
     single_name_spread::Float64, tranche_spread::Float64, first_pay_date::Date, last_pay_date::Date; 
-    N::Int64=100, A::Float64=10.0e+06, R::Float64=0.40,  periods::Int64=12, r_f::Float64=0.0425)
+    N::Int64=100, A::Float64=10.0e+06, R::Float64=0.40,  periods::Int64=12, r_f::Float64=0.0425,
+    cpr::Float64=25.0)
 
     pmt_dates = collect(first_pay_date:Month(1):last_pay_date)
     T = length(pmt_dates)
@@ -114,7 +116,7 @@ function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64,
 
     p_dist = zeros(N+1, T)
 
-    B = create_schedule(A, T, 25.0)
+    B = create_schedule(A, T, cpr)
 
     for i in 1:T
         t = i * dt
