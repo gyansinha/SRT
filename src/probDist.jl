@@ -2,6 +2,7 @@ using Distributions
 using QuadGK
 using Dates
 using OrderedCollections
+using DataFrames
 
 
 """
@@ -70,12 +71,12 @@ end
 
 
 """
-    function create_schedule(A::Float64, T::Int64, cpr::Float64)
+    function create_schedule(T::Int64, cpr::Float64)
 """
-function create_schedule(A::Float64, T::Int64, cpr::Float64; period::Int64=12)
+function create_schedule(T::Int64, cpr::Float64; period::Int64=12)
     smm = 1 - (1-cpr/100)^(1/period)
     B = zeros(T)
-    B[1] = A
+    B[1] = 1.0
     for t in 2:T
         B[t] = B[t-1] * (1 - smm)
     end
@@ -102,10 +103,11 @@ function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64,
     h = single_name_spread/(1-R)
     dt = 1/periods
 
-    H = detach * (A * N)
-    L = attach * (A * N)
-
     d = exp.(-r_f * dt .* (1:T))
+
+    B = A .* create_schedule(T, cpr)
+    H = detach .* (B .* N)
+    L = attach .* (B .* N)
 
     el = zeros(T)
     ufee = zeros(T)
@@ -116,19 +118,18 @@ function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64,
 
     p_dist = zeros(N+1, T)
 
-    B = create_schedule(A, T, cpr)
-
     for i in 1:T
         t = i * dt
         q = 1.0 - exp(-h * t)
         p_dist[:, i] = probDist!(N, a, q, p, p_uncond, buf)
         per_loan_loss = B[i] * (1 - R)
+        
         loss = 0.0
         for l in 1:N+1
-            loss += p_dist[l, i] * max(min((l-1) * per_loan_loss, H) - L, 0)
+            loss += p_dist[l, i] * max(min((l-1) * per_loan_loss, H[i]) - L[i], 0)
         end
         el[i] = loss
-        ufee[i] = (d[i] * dt * ((H - L) - el[i]))
+        ufee[i] = (d[i] * dt * ((H[i] - L[i]) - el[i]))
     
         # println("i: $i, t: $t, el: $(el[i]), ufee: $(ufee[i])")
     end
@@ -140,13 +141,48 @@ function tranche_valuation(attach::Float64, detach::Float64, ρ::Float64,
     end
     total_contingent = sum(contingent)
     spar = total_contingent / sum(ufee)
-    println("Par Spread on $(100*attach)% to $(100*detach)% tranche: $(10_000*spar) bps")
+    # println("Par Spread on $(100*attach)% to $(100*detach)% tranche: $(10_000*spar) bps")
     
     fee = tranche_spread * sum(ufee)
     mtm = fee - total_contingent
 
     result = OrderedDict("Par Spread" => spar * 10_000, "MtM" => mtm)
     return result
+end
+
+
+"""
+    function create_grid(structure_dict::OrderedDict{String, Tuple{String, Float64, Float64, Int64}},
+        ρ::Float64, cpr::Float64; single_name_spread = 50/10_000,
+        first_pay_date = Date("2025-04-25"), last_pay_date = Date("2030-03-25"))
+
+    structure_dict encapsulates information about the tranches in a dictionary where 
+    the key is the class name and the value is a tuple composed of (rating, attach, detach, spread)
+    
+    Example: 
+        structure_dict = OrderedDict(
+            "A" => ("AAA", 0.1250, 1.0000,  50),
+            "B" => ("AA",  0.0475, 0.1250, 160),
+            "C" => ("A",   0.0380, 0.0475, 190),
+            "D" => ("BBB", 0.0250, 0.0380, 300),
+            "R" => ("NR",  0.0000, 0.0250, 900),
+        )
+"""
+function create_grid(structure_dict::OrderedDict{String, Tuple{String, Float64, Float64, Int64}},
+    ρ::Float64, cpr::Float64; single_name_spread = 50/10_000,
+    first_pay_date = Date("2025-04-25"), last_pay_date = Date("2030-03-25"))
+
+    res = []
+    for (k, v) in structure_dict
+        rating = v[1]; attach = v[2]; detach = v[3]; tranche_spread = v[4]/10_000
+
+        out = tranche_valuation(attach, detach, ρ, single_name_spread, tranche_spread, 
+                first_pay_date, last_pay_date, cpr=cpr)
+        tmp_res = DataFrame(rho=ρ, cpr=cpr, class=k, rating=rating, attach=attach*100, 
+            detach=detach*100, tranche_spread=v[4], par_spread=round(out["Par Spread"],digits=0))
+        push!(res, tmp_res)
+    end
+    return reduce(vcat, res)
 end
 
 
